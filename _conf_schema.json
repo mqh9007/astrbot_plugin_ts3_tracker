@@ -30,6 +30,35 @@
     "hint": "开启后，直接发送 ts、上号、人呢 也会触发查询",
     "default": false
   },
+  "show_online_duration_in_status": {
+    "type": "bool",
+    "description": "上号查询时显示在线时长",
+    "hint": "开启后，/ts、上号、人呢 的返回结果会显示为 test(23分钟) 这种格式",
+    "default": false
+  },
+  "enable_group_whitelist": {
+    "type": "bool",
+    "description": "开启群白名单",
+    "hint": "开启后，只有白名单内的群才可以触发插件指令；默认关闭时允许所有群",
+    "default": false
+  },
+  "group_whitelist": {
+    "type": "string",
+    "description": "群白名单",
+    "hint": "仅在开启群白名单后生效。请输入允许使用插件的 QQ 群号，支持一行一个，或用英文/中文逗号分隔"
+  },
+  "online_message_template": {
+    "type": "string",
+    "description": "进服提示模板",
+    "hint": "支持变量：{nickname}/{username}、{time}/{timestamp}/{start_time}/{online_time}、{total_users}/{online_count}、{online_list}。可直接使用 \\n 表示换行",
+    "default": "让我看看是谁还没上号 👀\\n🧾 昵称：{nickname}\\n🟢 上线时间：{time}\\n📣 {nickname} 进入了 TS 服务器\\n👥 当前在线人数：{total_users}\\n📜 在线列表：{online_list}"
+  },
+  "offline_message_template": {
+    "type": "string",
+    "description": "退服提示模板",
+    "hint": "支持变量：{nickname}/{username}、{time}/{timestamp}/{end_time}/{offline_time}、{start_time}、{duration}、{total_users}/{online_count}、{online_list}。可直接使用 \\n 表示换行",
+    "default": "📤 用户下线通知\\n🧾 昵称：{nickname}\\n🟢 上线时间：{start_time}\\n🔴 下线时间：{end_time}\\n⏱️ 在线时长：{duration}\\n👥 当前在线人数：{online_count}\\n📜 在线列表：{online_list}"
+  },
   "enable_monitor": {
     "type": "bool",
     "description": "开启进入/离开监控",

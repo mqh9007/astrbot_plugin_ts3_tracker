@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import re
 import sys
 import time
 from pathlib import Path
@@ -13,7 +14,13 @@ from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 try:
-    from .notifications import build_offline_message, build_online_message, format_duration
+    from .notifications import (
+        DEFAULT_OFFLINE_MESSAGE_TEMPLATE,
+        DEFAULT_ONLINE_MESSAGE_TEMPLATE,
+        build_offline_message,
+        build_online_message,
+        format_duration,
+    )
     from .presence import PresenceTracker
     from .storage import PluginLocalStorage
     from .ts3_query import Ts3QueryClient, Ts3QueryError
@@ -22,7 +29,13 @@ except ImportError:
     if str(current_dir) not in sys.path:
         sys.path.insert(0, str(current_dir))
 
-    from notifications import build_offline_message, build_online_message, format_duration
+    from notifications import (
+        DEFAULT_OFFLINE_MESSAGE_TEMPLATE,
+        DEFAULT_ONLINE_MESSAGE_TEMPLATE,
+        build_offline_message,
+        build_online_message,
+        format_duration,
+    )
     from presence import PresenceTracker
     from storage import PluginLocalStorage
     from ts3_query import Ts3QueryClient, Ts3QueryError
@@ -33,9 +46,9 @@ PLUGIN_NAME = "astrbot_plugin_ts3_tracker"
 
 @register(
     "ts3_tracker",
-    "Codex",
-    "查询 TeamSpeak 3 服务器在线用户，并持续推送进入、离开和在线时长通知。",
-    "1.0.1",
+    "moeneri",
+    "拥有 TeamSpeak 3 在线状态查询、频道成员展示、上下线通知的功能。",
+    "1.0.3",
     "",
 )
 class Ts3TrackerPlugin(Star):
@@ -64,6 +77,8 @@ class Ts3TrackerPlugin(Star):
     async def query_ts_status(self, event: AstrMessageEvent):
         """查询当前 TS3 在线用户。"""
         self._ensure_monitor_task()
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -76,6 +91,8 @@ class Ts3TrackerPlugin(Star):
     async def query_ts_server(self, event: AstrMessageEvent):
         """查询 TS3 服务器信息。"""
         self._ensure_monitor_task()
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -89,6 +106,8 @@ class Ts3TrackerPlugin(Star):
     async def toggle_ts_notify(self, event: AstrMessageEvent, action: str = ""):
         """管理员控制当前会话是否接收 TS3 进入/离开通知。"""
         self._ensure_monitor_task()
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -148,6 +167,8 @@ class Ts3TrackerPlugin(Star):
     @filter.command("tsbind", alias={"ts绑定", "ts开启监听"})
     async def bind_ts_notify(self, event: AstrMessageEvent):
         """管理员开启当前会话的 TS3 进入/离开通知监听。"""
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -165,6 +186,8 @@ class Ts3TrackerPlugin(Star):
     @filter.command("tsunbind", alias={"ts解绑", "ts关闭监听"})
     async def unbind_ts_notify(self, event: AstrMessageEvent):
         """管理员关闭当前会话的 TS3 进入/离开通知监听。"""
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -182,6 +205,8 @@ class Ts3TrackerPlugin(Star):
     @filter.command("tsdbclear", alias={"ts清库", "ts清空数据库"})
     async def clear_database(self, event: AstrMessageEvent, confirm: str = ""):
         """清空 TS3 Tracker 数据库。使用 /tsdbclear 确认 执行。"""
+        if not self._is_group_event_allowed(event):
+            return
         if not self._claim_message(event):
             return
         event.stop_event()
@@ -212,6 +237,8 @@ class Ts3TrackerPlugin(Star):
         self._ensure_monitor_task()
         content = (event.message_str or "").strip()
         if content in self.STATUS_COMMANDS:
+            if not self._is_group_event_allowed(event):
+                return
             if not self._claim_message(event):
                 return
             event.stop_event()
@@ -222,6 +249,8 @@ class Ts3TrackerPlugin(Star):
             return
 
         if content in self.SERVER_COMMANDS:
+            if not self._is_group_event_allowed(event):
+                return
             if not self._claim_message(event):
                 return
             event.stop_event()
@@ -235,7 +264,10 @@ class Ts3TrackerPlugin(Star):
         if isinstance(status, str):
             return status
 
-        channel_members = self._group_users_by_channel(status)
+        channel_members = self._group_users_by_channel(
+            status,
+            show_duration=self._show_status_online_duration(),
+        )
         if not channel_members:
             return "没有人。"
 
@@ -307,6 +339,7 @@ class Ts3TrackerPlugin(Star):
                     timestamp=event.start_ts,
                     total_users=event.total_users,
                     online_names=event.online_names,
+                    template=self._online_notify_template(),
                 )
             else:
                 message = build_offline_message(
@@ -314,6 +347,7 @@ class Ts3TrackerPlugin(Star):
                     start_ts=event.start_ts,
                     end_ts=event.end_ts or event.start_ts,
                     online_names=event.online_names,
+                    template=self._offline_notify_template(),
                 )
 
             for target in targets:
@@ -372,11 +406,17 @@ class Ts3TrackerPlugin(Star):
         self._debug_log("TS3 query succeeded with %s online clients", status.online_count)
         return status
 
-    def _group_users_by_channel(self, status) -> list[tuple[str, list[str]]]:
+    def _group_users_by_channel(
+        self,
+        status,
+        show_duration: bool = False,
+    ) -> list[tuple[str, list[str]]]:
         grouped: dict[str, list[str]] = {}
         for user in status.users:
             channel_name = user.channel_name or "未知频道"
-            grouped.setdefault(channel_name, []).append(user.nickname)
+            grouped.setdefault(channel_name, []).append(
+                self._build_user_label(user, show_duration=show_duration)
+            )
 
         ordered: list[tuple[str, list[str]]] = []
         seen: set[str] = set()
@@ -395,9 +435,18 @@ class Ts3TrackerPlugin(Star):
         grouped: dict[str, list[str]] = {}
         for user in status.users:
             channel_name = user.channel_name or "未知频道"
-            duration = format_duration(int(getattr(user, "connected_duration_seconds", 0)))
-            grouped.setdefault(channel_name, []).append(f"{user.nickname}({duration})")
+            grouped.setdefault(channel_name, []).append(
+                self._build_user_label(user, show_duration=True)
+            )
         return grouped
+
+    def _build_user_label(self, user, show_duration: bool = False) -> str:
+        nickname = str(getattr(user, "nickname", "") or "-")
+        if not show_duration:
+            return nickname
+
+        duration = format_duration(int(getattr(user, "connected_duration_seconds", 0)))
+        return f"{nickname}({duration})"
 
     def _resolve_storage_dir(self) -> Path:
         try:
@@ -449,6 +498,71 @@ class Ts3TrackerPlugin(Star):
 
     def _debug_enabled(self) -> bool:
         return self._get_bool_config("debug", False)
+
+    def _online_notify_template(self) -> str:
+        return str(
+            self.config.get(
+                "online_message_template",
+                DEFAULT_ONLINE_MESSAGE_TEMPLATE,
+            )
+            or DEFAULT_ONLINE_MESSAGE_TEMPLATE
+        )
+
+    def _offline_notify_template(self) -> str:
+        return str(
+            self.config.get(
+                "offline_message_template",
+                DEFAULT_OFFLINE_MESSAGE_TEMPLATE,
+            )
+            or DEFAULT_OFFLINE_MESSAGE_TEMPLATE
+        )
+
+    def _show_status_online_duration(self) -> bool:
+        return self._get_bool_config("show_online_duration_in_status", False)
+
+    def _group_whitelist_enabled(self) -> bool:
+        return self._get_bool_config("enable_group_whitelist", False)
+
+    def _configured_group_whitelist(self) -> set[str]:
+        raw_value = self.config.get("group_whitelist", "")
+        if isinstance(raw_value, (list, tuple, set)):
+            tokens = [str(item).strip() for item in raw_value]
+        else:
+            text = str(raw_value or "")
+            tokens = re.split(r"[\s,，;；]+", text)
+
+        return {token for token in tokens if token}
+
+    def _get_event_group_id(self, event: AstrMessageEvent) -> str:
+        getter = getattr(event, "get_group_id", None)
+        if callable(getter):
+            try:
+                group_id = getter()
+            except Exception:  # pragma: no cover - defensive guard
+                group_id = None
+            if group_id not in (None, ""):
+                return str(group_id).strip()
+
+        message_obj = getattr(event, "message_obj", None)
+        group_id = getattr(message_obj, "group_id", None) if message_obj else None
+        if group_id in (None, ""):
+            return ""
+        return str(group_id).strip()
+
+    def _is_group_event_allowed(self, event: AstrMessageEvent) -> bool:
+        if not self._group_whitelist_enabled():
+            return True
+
+        group_id = self._get_event_group_id(event)
+        if not group_id:
+            return True
+
+        allowed_groups = self._configured_group_whitelist()
+        if group_id in allowed_groups:
+            return True
+
+        self._debug_log("Ignored command from non-whitelisted group: %s", group_id)
+        return False
 
     def _ensure_monitor_task(self) -> None:
         if self.monitor_task and not self.monitor_task.done():

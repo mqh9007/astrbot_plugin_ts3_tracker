@@ -15,6 +15,9 @@
 - 查询当前 TS3 在线用户
 - 查询 TS3 服务器名称、地址、端口和频道信息
 - 按频道展示在线成员
+- 可选在在线查询中显示在线时长
+- 可选限制只有指定群可以触发插件命令
+- 支持自定义进服提示和退服提示模板
 - 开启后持续监听成员上线、离线
 - 向已绑定的会话推送通知消息
 
@@ -26,7 +29,7 @@
 
 ## 安装方式
 
-将插件目录放入 AstrBot 插件目录后，在 AstrBot WebUI 中加载或重载插件即可。
+在插件市场搜索TS3 或者 teamspeak 3 找到本插件安装即可
 
 如果你使用 GitHub 管理插件，也可以把本项目上传到自己的仓库后，再通过 AstrBot 的插件管理方式安装。
 
@@ -57,11 +60,11 @@ TS3 ServerQuery 端口，常见为：
 
 - `10011`
 
-`serverquery_username`
+`serveradmin`
 
 ServerQuery 登录账号。
 
-`serverquery_password`
+`passowrd`
 
 ServerQuery 登录密码。
 
@@ -80,6 +83,113 @@ ServerQuery 登录密码。
 - `人呢`
 - `tsinfo`
 - `ts服务器`
+
+`show_online_duration_in_status`
+
+是否在 `上号`、`/ts`、`人呢` 这类在线查询结果里显示在线时长。
+
+关闭时示例：
+
+```text
+APEX: test
+原神: 玩家A、玩家B
+```
+
+开启时示例：
+
+```text
+APEX: test(23分钟)
+原神: 玩家A(1小时5分钟)、玩家B(12分钟)
+```
+
+默认关闭。
+
+`enable_group_whitelist`
+
+是否开启群白名单。
+
+默认关闭。关闭时，所有群都可以触发插件命令。
+
+开启后，只有白名单内的群才可以触发插件命令，私聊不受影响。
+
+`group_whitelist`
+
+群白名单内容。
+
+只有在开启 `enable_group_whitelist` 后才会生效。
+
+如果开启了群白名单但没有填写群号，那么所有群消息都会被拦截。
+
+填写方式支持：
+
+- 一行一个群号
+- 使用英文逗号分隔
+- 使用中文逗号分隔
+
+示例：
+
+```text
+123456789
+987654321
+```
+
+或者：
+
+```text
+123456789,987654321
+```
+
+`online_message_template`
+
+进服提示模板。
+
+配置页会默认预填当前插件原本使用的进服提示格式，你可以直接在这个基础上修改。
+
+配置页中默认预填的内容如下：
+
+```text
+让我看看是谁还没上号 👀\n🧾 昵称：{nickname}\n🟢 上线时间：{time}\n📣 {nickname} 进入了 TS 服务器\n👥 当前在线人数：{total_users}\n📜 在线列表：{online_list}
+```
+
+说明：
+
+- 可以直接保留这段原始内容使用
+- 可以在此基础上修改文字
+- 可以继续使用 `\n` 表示换行
+
+支持变量：
+
+- `{nickname}` 或 `{username}`：用户名
+- `{time}`、`{timestamp}`、`{start_time}`、`{online_time}`：上线时间
+- `{total_users}` 或 `{online_count}`：当前在线人数
+- `{online_list}`：当前在线列表
+
+`offline_message_template`
+
+退服提示模板。
+
+配置页会默认预填当前插件原本使用的退服提示格式，你可以直接在这个基础上修改。
+
+配置页中默认预填的内容如下：
+
+```text
+📤 用户下线通知\n🧾 昵称：{nickname}\n🟢 上线时间：{start_time}\n🔴 下线时间：{end_time}\n⏱️ 在线时长：{duration}\n👥 当前在线人数：{online_count}\n📜 在线列表：{online_list}
+```
+
+说明：
+
+- 可以直接保留这段原始内容使用
+- 可以在此基础上修改文字
+- 可以继续使用 `\n` 表示换行
+
+支持变量：
+
+- `{nickname}` 或 `{username}`：用户名
+- `{time}`、`{timestamp}`、`{end_time}`、`{offline_time}`：下线时间
+- `{start_time}`：上线时间
+- `{duration}`：在线时长
+- `{total_users}` 或 `{online_count}`：当前在线人数
+- `{online_list}`：当前在线列表
 
 `enable_monitor`
 
@@ -148,6 +258,13 @@ APEX: test
 原神: 玩家A、玩家B
 ```
 
+开启在线时长显示后：
+
+```text
+APEX: test(23分钟)
+原神: 玩家A(1小时5分钟)、玩家B(12分钟)
+```
+
 如果当前没有人在线，插件会返回：
 
 ```text
@@ -161,7 +278,7 @@ APEX: test
 服务器地址：127.0.0.1:9987
 在线人数：1
 频道信息：
-- APEX（1人）：test(15分32秒)
+- APEX（1人）：test(15分钟32秒)
 - 原神（0人）
 - 守望先锋-归西（0人）
 - 穿越火线（0人）
@@ -184,6 +301,27 @@ APEX: test
 
 只有开启监听且完成绑定的会话，才会收到通知。
 
+如果你想自定义通知内容，可以在插件配置中修改：
+
+- `online_message_template`
+- `offline_message_template`
+
+例如你可以把进服提示改成：
+
+```text
+{nickname} 上线了
+时间：{time}
+当前在线：{online_count}
+```
+
+也可以把退服提示改成：
+
+```text
+{nickname} 下线了
+在线时长：{duration}
+下线时间：{end_time}
+```
+
 ## 常见问题
 
 ### 发送命令没有响应
@@ -194,6 +332,7 @@ APEX: test
 - 插件配置是否填写完整
 - 机器人当前平台是否支持接收该命令
 - 是否开启了纯文本触发
+- 当前群是否在群白名单中
 
 如果没有开启 `enable_plain_text_trigger`，请使用带 `/` 的命令，例如 `/ts`。
 
