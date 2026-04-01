@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import asyncssh
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -81,7 +82,7 @@ class Ts3QueryClient:
         server_port: int,
         username: str,
         password: str,
-        query_port: int = 10011,
+        query_port: int = 10022,
         timeout: float = 10.0,
         debug: bool = False,
     ):
@@ -95,62 +96,45 @@ class Ts3QueryClient:
 
     async def fetch_status(self) -> Ts3ServerStatus:
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.query_port),
+            # 1. 使用 asyncssh 建立连接，并传入账号密码进行 SSH 协议层面的鉴权
+            # known_hosts=None 表示跳过对服务器公钥的严格校验（类似 ssh -o StrictHostKeyChecking=no）
+            conn = await asyncio.wait_for(
+                asyncssh.connect(
+                    self.host,
+                    port=self.query_port,
+                    username=self.username,
+                    password=self.password,
+                    known_hosts=None
+                ),
                 timeout=self.timeout,
             )
+            # 2. 创建一个会话进程 (开启 binary 模式以便兼容下方原有的 bytes 读写逻辑)
+            process = await conn.create_process(encoding=None)
+            reader = process.stdout
+            writer = process.stdin
+            
         except Exception as exc:  # pragma: no cover - network dependent
             raise Ts3QueryError(
-                f"无法连接到 ServerQuery：{self.host}:{self.query_port} ({exc})"
+                f"无法通过 SSH 连接到 ServerQuery：{self.host}:{self.query_port} ({exc})"
             ) from exc
 
         try:
+            # 读取欢迎语
             await self._consume_welcome(reader)
-            await self._execute(
-                reader,
-                writer,
-                f"login {self._escape(self.username)} {self._escape(self.password)}",
-                "login",
-            )
+            
+            # 注意：删除了 login 指令！因为 SSH 连接成功时已经鉴权完毕。
+            
             await self._execute(
                 reader,
                 writer,
                 f"use port={self.server_port}",
                 "use",
             )
-            serverinfo_records = await self._execute(reader, writer, "serverinfo", "serverinfo")
-            channel_records = await self._execute(
-                reader,
-                writer,
-                "channellist",
-                "channellist",
-            )
-            client_records = await self._execute(
-                reader,
-                writer,
-                "clientlist -uid -away -ip",
-                "clientlist",
-            )
-
-            client_details: dict[str, dict[str, str]] = {}
-            for client in client_records:
-                if client.get("client_type") == "1":
-                    continue
-                clid = client.get("clid", "")
-                if not clid:
-                    continue
-                detail_records = await self._execute(
-                    reader,
-                    writer,
-                    f"clientinfo clid={clid}",
-                    "clientinfo",
-                )
-                client_details[clid] = detail_records[0] if detail_records else {}
-            await self._write_line(writer, "quit")
         finally:
-            writer.close()
             with contextlib.suppress(Exception):
-                await writer.wait_closed()
+                process.close()
+                conn.close()
+                await conn.wait_closed()
 
         serverinfo = serverinfo_records[0] if serverinfo_records else {}
         channels = {
@@ -203,23 +187,29 @@ class Ts3QueryClient:
 
     async def list_virtual_servers(self) -> list[dict[str, str]]:
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(self.host, self.query_port),
+            conn = await asyncio.wait_for(
+                asyncssh.connect(
+                    self.host,
+                    port=self.query_port,
+                    username=self.username,
+                    password=self.password,
+                    known_hosts=None
+                ),
                 timeout=self.timeout,
             )
+            process = await conn.create_process(encoding=None)
+            reader = process.stdout
+            writer = process.stdin
         except Exception as exc:  # pragma: no cover - network dependent
             raise Ts3QueryError(
-                f"无法连接到 ServerQuery：{self.host}:{self.query_port} ({exc})"
+                f"无法通过 SSH 连接到 ServerQuery：{self.host}:{self.query_port} ({exc})"
             ) from exc
 
         try:
             await self._consume_welcome(reader)
-            await self._execute(
-                reader,
-                writer,
-                f"login {self._escape(self.username)} {self._escape(self.password)}",
-                "login",
-            )
+            
+            # 删除了 login 指令
+            
             servers = await self._execute(
                 reader,
                 writer,
@@ -229,9 +219,10 @@ class Ts3QueryClient:
             await self._write_line(writer, "quit")
             return servers
         finally:
-            writer.close()
             with contextlib.suppress(Exception):
-                await writer.wait_closed()
+                process.close()
+                conn.close()
+                await conn.wait_closed()
 
     async def _execute(
         self,
